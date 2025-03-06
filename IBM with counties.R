@@ -1,30 +1,7 @@
+
 ##########################################################################
-## IBM SEIR Model for Measles with Age Groups
-## Incorporating County-Specific Vaccine Exemption and 
-## Age-Specific Contact Rates (Children vs. Adults; High-risk vs. Low-risk)
-## Infectious individuals are assumed to stop contributing to transmission 
-## 4.5 days after becoming infectious.
-##
-## This script simulates measles transmission in a heterogeneous population 
-## using a stochastic SEIR individual-based model. Individuals are assigned 
-## to counties (with county-specific K-12 proportions and vaccine exemption 
-## rates) and categorized as either "child" (K-12 aged) or "adult." For each 
-## age group, separate contact parameters are used for high-risk and low-risk 
-## individuals. Once an individual becomes infectious, they contribute to 
-## transmission only for the first 4.5 days as it is assumed they will isolate 
-## once a visible rash appears.
-##
-## County Data:
-##   Gaines County, TX:   Population = 22,500; 35% K-12; 17.6% vaccine exempt (children)
-##   Dawson County, TX:   Population = 12,004; 25.6% K-12; 2.52% vaccine exempt (children)
-##   Terry County, TX:    Population = 11,576; 28.4% K-12; 2.68% vaccine exempt (children)
-##   Yoakum County, TX:   Population = 7,468;  32.1% K-12; 1.9% vaccine exempt (children)
-##   Lea County, NM:      Population = 72,000; 28.8% K-12; 0.9% vaccine exempt (children)
-##
-## For adults, the assumed rate of non-MMR immunization is 13% for Gaines and 5% for others.
-##
-## Author: Mike Pistono
-## Date: 24 Feb 2025
+## IBM SEIR Model for Measles with 3 Age Groups (0-4, 5-17, 18+)
+## using Age-Assortative Mixing (3x3 contact matrix)
 ##########################################################################
 
 rm(list = ls())
@@ -42,31 +19,30 @@ library(gridExtra)
 ## ---------------------------
 SEIR_ibm <- function(initState, theta, numIter) {
   
+
   ## General transmission parameters
-  beta         <- theta["beta"]         # Baseline transmission probability per contact
+  #beta in simulation loop allowing for varied transmission probability based on awareness of the outbreak
   ve           <- theta["ve"]           # Vaccine effectiveness (reduces force for low-risk)
   latentMean   <- theta["latentPeriod"] # Mean latent period (days)
   gamma_shape  <- 2
   gamma_scale  <- theta["D"] / gamma_shape
   
-  ## Age-Assortative Mixing Parameters (Contact Matrix)
-  # mCC: child-to-child contacts
-  # mCA: child-to-adult contacts
-  # mAC: adult-to-child contacts
-  # mAA: adult-to-adult contacts
-  mCC <- theta["mCC"]
-  mCA <- theta["mCA"]
-  mAC <- theta["mAC"]
-  mAA <- theta["mAA"]
-  
-  ## County-Level Data
+  ## County-Level Data (only the 5 counties from your original model)
+  ## Columns:
+  ##   - pctUnder5, pctUnder18: percentages, e.g. 7.3 => 7.3%
+  ##   - kindExempt: "Kindergarten Vaccine Exempt" (for 0-4)
+  ##   - k12Exempt: "Percent K12 Vaccine Exempt" (for 5-17)
+  ##   - adultExempt: assumed fraction unvaccinated among 18+
   countyData <- data.frame(
-    county     = c("Gaines", "Dawson", "Terry", "Yoakum", "Lea"),
-    population = c(22500, 12004, 11576, 7468, 72000),
-    propSchool = c(0.35, 0.256, 0.284, 0.321, 0.288),  # proportion K-12 aged
-    riskChild  = c(0.18, 0.025, 0.027, 0.02, 0.01),      # % vaccine exemptions among K-12
-    riskAdult  = c(0.13, 0.05, 0.05, 0.05, 0.05)         # estimated % unvaccinated adults
+    county      = c("Gaines",  "Dawson",   "Terry",    "Yoakum"),
+    population  = c(22500,     12004,      11576,      7468),
+    pctUnder5   = c(10.4,      7.3,        7.7,        8.9),
+    pctUnder18  = c(36.0,      25.0,       28.6,       32.9),
+    kindExempt  = c(17.6,      10.6,       3.7,        5.8),   # for 0-4
+    k12Exempt   = c(13.6,      2.52,       2.68,       1.9),   # for 5-17
+    adultExempt = c(8.0,       5.0,        5.0,        5.0)    # assumed 5% for 18+
   )
+  
   totalCountyPop <- sum(countyData$population)
   countyData$weight <- countyData$population / totalCountyPop
   
@@ -75,41 +51,72 @@ SEIR_ibm <- function(initState, theta, numIter) {
   I0 <- initState["I"]
   N  <- S0 + I0
   
-  # Create a list to store individual attributes.
+  # Create a list to store individual attributes (state, times, county, age, risk).
   indiv <- vector(mode = "list", length = N)
   
-  # Initialize individuals: first S0 as susceptible; next I0 as infectious.
+  # Initialize states: first S0 as susceptible; next I0 as infectious.
   for (i in 1:S0) {
     indiv[[i]] <- list(state = "S", latentTime = NA, infectiousTime = NA)
   }
   for (i in (S0 + 1):N) {
-    indiv[[i]] <- list(state = "I", latentTime = NA,
+    indiv[[i]] <- list(state = "I",
+                       latentTime = NA,
                        infectiousTime = rgamma(1, shape = gamma_shape, scale = gamma_scale),
                        days_infectious = 1)
   }
   
-  ## Assign County, Age, and Risk Status
+  ## Assign County, Age Group, and Risk
   counties <- countyData$county
-  weights <- countyData$weight
+  weights  <- countyData$weight
   
   for (i in 1:N) {
+    # 1) Pick county
     assignedCounty <- sample(counties, size = 1, prob = weights)
     indiv[[i]]$county <- assignedCounty
     countyParams <- countyData[countyData$county == assignedCounty, ]
     
-    if (runif(1) < countyParams$propSchool) {
-      indiv[[i]]$age <- "child"
-      indiv[[i]]$risk <- ifelse(runif(1) < countyParams$riskChild, "H", "L")
+    # 2) Decide which age group (0-4, 5-17, or 18+)
+    r <- runif(1)
+    frac_0_4  <- countyParams$pctUnder5 / 100
+    frac_5_17 <- (countyParams$pctUnder18 - countyParams$pctUnder5) / 100
+    # The remainder is 18+
+    
+    if (r < frac_0_4) {
+      # 0-4
+      indiv[[i]]$age <- "0-4"
+      # Probability of being unvaccinated is 'kindExempt' from table
+      if (runif(1) < (countyParams$kindExempt / 100)) {
+        indiv[[i]]$risk <- "H"
+      } else {
+        indiv[[i]]$risk <- "L"
+      }
+      
+    } else if (r < frac_0_4 + frac_5_17) {
+      # 5-17
+      indiv[[i]]$age <- "5-17"
+      if (runif(1) < (countyParams$k12Exempt / 100)) {
+        indiv[[i]]$risk <- "H"
+      } else {
+        indiv[[i]]$risk <- "L"
+      }
+      
     } else {
-      indiv[[i]]$age <- "adult"
-      indiv[[i]]$risk <- ifelse(runif(1) < countyParams$riskAdult, "H", "L")
+      # 18+
+      indiv[[i]]$age <- "18+"
+      if (runif(1) < (countyParams$adultExempt / 100)) {
+        indiv[[i]]$risk <- "H"
+      } else {
+        indiv[[i]]$risk <- "L"
+      }
     }
   }
   
-  ## Pre-allocate Storage for Time Series
+  ## Pre-allocate Time Series
   timeVec <- 1:numIter
-  numS <- numeric(numIter); numE <- numeric(numIter)
-  numI <- numeric(numIter); numR <- numeric(numIter)
+  numS <- numeric(numIter)
+  numE <- numeric(numIter)
+  numI <- numeric(numIter)
+  numR <- numeric(numIter)
   
   stateVector <- sapply(indiv, function(x) x$state)
   numS[1] <- sum(stateVector == "S")
@@ -118,7 +125,40 @@ SEIR_ibm <- function(initState, theta, numIter) {
   numR[1] <- sum(stateVector == "R")
   
   ## Simulation Loop
+  
   for (t in 1:(numIter - 1)) {
+    
+    if (t < 28.0) {
+      beta <- theta["beta"] #transmission probability depending on time
+    } else {
+      beta <- 0.0325
+    }
+    
+    # --- Set contact rates based on day-of-week ---
+    # t %% 7 == 6 or 0 => weekend
+    if ((t %% 7 == 6) || (t %% 7 == 0)) {
+      # On weekends, set all 3x3 contact rates to 30
+      m_0_4_0_4  <- 45
+      m_0_4_5_17 <- 45
+      m_0_4_18   <- 30
+      m_5_17_0_4 <- 30
+      m_5_17_5_17<- 30
+      m_5_17_18  <- 30
+      m_18_0_4   <- 35
+      m_18_5_17  <- 35
+      m_18_18    <- 35
+    } else {
+      # Weekday contact rates from theta
+      m_0_4_0_4  <- theta["m_0_4_0_4"]
+      m_0_4_5_17 <- theta["m_0_4_5_17"]
+      m_0_4_18   <- theta["m_0_4_18"]
+      m_5_17_0_4 <- theta["m_5_17_0_4"]
+      m_5_17_5_17<- theta["m_5_17_5_17"]
+      m_5_17_18  <- theta["m_5_17_18"]
+      m_18_0_4   <- theta["m_18_0_4"]
+      m_18_5_17  <- theta["m_18_5_17"]
+      m_18_18    <- theta["m_18_18"]
+    }
     
     # Update days_infectious for those in state "I"
     for (j in 1:N) {
@@ -131,55 +171,63 @@ SEIR_ibm <- function(initState, theta, numIter) {
       }
     }
     
-    # Calculate prevalence by age group (active infectious individuals contribute only if days_infectious <= 4.5)
-    total_child <- sum(sapply(indiv, function(x) x$age == "child"))
-    total_adult <- sum(sapply(indiv, function(x) x$age == "adult"))
+    # Calculate prevalence by age group (actively infectious if days_infectious <= 4.5)
+    total_0_4  <- sum(sapply(indiv, function(x) x$age == "0-4"))
+    total_5_17 <- sum(sapply(indiv, function(x) x$age == "5-17"))
+    total_18   <- sum(sapply(indiv, function(x) x$age == "18+"))
     
     active_infectious <- function(x) {
-      return(x$state == "I" && !is.null(x$days_infectious) && x$days_infectious <= 4.5)
+      x$state == "I" && !is.null(x$days_infectious) && x$days_infectious <= 4.5
     }
     
-    prev_child <- if (total_child > 0) {
-      sum(sapply(indiv, function(x) x$age == "child" && active_infectious(x))) / total_child
-    } else 0
-    prev_adult <- if (total_adult > 0) {
-      sum(sapply(indiv, function(x) x$age == "adult" && active_infectious(x))) / total_adult
-    } else 0
+    prev_0_4  <- if (total_0_4  > 0) sum(sapply(indiv, function(x) x$age == "0-4"  && active_infectious(x))) / total_0_4  else 0
+    prev_5_17 <- if (total_5_17 > 0) sum(sapply(indiv, function(x) x$age == "5-17" && active_infectious(x))) / total_5_17 else 0
+    prev_18   <- if (total_18   > 0) sum(sapply(indiv, function(x) x$age == "18+"  && active_infectious(x))) / total_18   else 0
     
     # Update each individual
     for (j in 1:N) {
       currentState <- indiv[[j]]$state
+      
       if (currentState == "S") {
-        # Compute force of infection using the age-specific contact matrix:
-        if (indiv[[j]]$age == "child") {
-          lambda <- beta * (mCC * prev_child + mCA * prev_adult)
-          if (indiv[[j]]$risk == "L") {  # for low-risk, reduce effective force via vaccine protection
-            lambda <- (1 - ve) * lambda
-          }
-        } else {  # adult
-          lambda <- beta * (mAC * prev_child + mAA * prev_adult)
-          if (indiv[[j]]$risk == "L") {
-            lambda <- (1 - ve) * lambda
-          }
+        # Force of infection depends on individual's age group
+        if (indiv[[j]]$age == "0-4") {
+          lambda <- beta * (m_0_4_0_4  * prev_0_4 +
+                              m_0_4_5_17 * prev_5_17 +
+                              m_0_4_18   * prev_18)
+        } else if (indiv[[j]]$age == "5-17") {
+          lambda <- beta * (m_5_17_0_4  * prev_0_4 +
+                              m_5_17_5_17 * prev_5_17 +
+                              m_5_17_18   * prev_18)
+        } else {  # "18+"
+          lambda <- beta * (m_18_0_4   * prev_0_4 +
+                              m_18_5_17  * prev_5_17 +
+                              m_18_18    * prev_18)
         }
+        
+        # If "low-risk" (vaccinated), reduce force by vaccine effectiveness
+        if (indiv[[j]]$risk == "L") {
+          lambda <- (1 - ve) * lambda
+        }
+        
+        # Infection event
         if (runif(1) < lambda) {
           indiv[[j]]$state <- "E"
           indiv[[j]]$latentTime <- rexp(1, rate = 1/latentMean)
         }
       }
       
-      # Transition E -> I (latent period countdown)
+      # E -> I (latent countdown)
       if (currentState == "E" && !is.na(indiv[[j]]$latentTime)) {
         indiv[[j]]$latentTime <- indiv[[j]]$latentTime - 1
         if (indiv[[j]]$latentTime <= 0) {
           indiv[[j]]$state <- "I"
           indiv[[j]]$latentTime <- NA
           indiv[[j]]$infectiousTime <- rgamma(1, shape = gamma_shape, scale = gamma_scale)
-          indiv[[j]]$days_infectious <- 1  # start the counter
+          indiv[[j]]$days_infectious <- 1
         }
       }
       
-      # Transition I -> R (infectious period countdown)
+      # I -> R (infectious countdown)
       if (currentState == "I" && !is.na(indiv[[j]]$infectiousTime)) {
         indiv[[j]]$infectiousTime <- indiv[[j]]$infectiousTime - 1
         if (indiv[[j]]$infectiousTime <= 0) {
@@ -189,19 +237,19 @@ SEIR_ibm <- function(initState, theta, numIter) {
       }
     }
     
-    # Update overall compartment counts
+    # Update compartment counts
     stateVector <- sapply(indiv, function(x) x$state)
     numS[t+1] <- sum(stateVector == "S")
     numE[t+1] <- sum(stateVector == "E")
-    numI[t+1] <- sum(sapply(indiv, function(x) x$state == "I" && 
-                              !is.null(x$days_infectious) && 
+    numI[t+1] <- sum(sapply(indiv, function(x) x$state == "I" &&
+                              !is.null(x$days_infectious) &&
                               x$days_infectious <= 4.5))
     numR[t+1] <- sum(stateVector == "R")
   }
   
   ## Post-Processing
   prevOverall <- numI / (numS + numE + numI + numR)
-  inc <- numI  # Incidence approximated by the number of active infectious individuals
+  inc <- numI  # approximate incidence by number of actively infectious
   totalCases <- S0 - numS[numIter]
   
   results <- data.frame(time = timeVec,
@@ -216,21 +264,31 @@ SEIR_ibm <- function(initState, theta, numIter) {
 ## Simulation Parameters & Run
 ## ---------------------------
 
-# Define initial state using the sum of county populations:
-initState <- c(S = 22500 + 12004 + 11576 + 7468 + 72000, I = 2) # 3 initial infections
+# Initial state (S + I) from the new populations:
+initState <- c(S = 22500 + 12004 + 11576 + 7468, I = 2)
 
-# Parameter vector with general transmission parameters and the contact matrix
-theta <- c(beta = 0.06,           # Baseline transmission probability per contact
-           D = 8,                 # Infectious period (days)
-           latentPeriod = 10,     # Latent period (days)
-           ve = 0.96,             # Vaccine effectiveness
-           mCC = 250.0,             # Child-to-child contact rate
-           mCA = 25.0,             # Child-to-adult contact rate (adults contacted by each child)
-           mAC = 4.0,             # Adult-to-child contact rate (children contacted by each adult)
-           mAA = 10.0)            # Adult-to-adult contact rate
+theta <- c(
+  beta         = 0.065,  # Baseline transmission probability per contact
+  D            = 8,     # Infectious period (days)
+  latentPeriod = 10,    # Latent period (days)
+  ve           = 0.97,  # Vaccine effectiveness
+  
+  # 3x3 contact matrix (weekday rates):
+  m_0_4_0_4   = 65.0,  # (0–4) to (0–4), avg school size with kindergarteners is 334 
+  m_0_4_5_17  = 85.0,   # (0–4) to (5–17) 
+  m_0_4_18    = 15.0,   # (0–4) to (18+)
+  
+  m_5_17_0_4  = 40.0,   # (5–17) to (0–4) avg school size with all other grades is 475
+  m_5_17_5_17 = 175.0,  # (5–17) to (5–17) 
+  m_5_17_18   = 30.0,   # (5–17) to (18+)
+  
+  m_18_0_4    = 5.0,    # (18+) to (0–4)
+  m_18_5_17   = 20.0,   # (18+) to (5–17)
+  m_18_18     = 15.0     # (18+) to (18+)
+)
 
-numIter <- 200    # Simulate for 200 days
-nSims   <- 50     # Number of simulation replicates
+numIter <- 220
+nSims   <- 50
 
 ## Run simulations in parallel
 nCores <- parallel::detectCores() - 1
@@ -243,6 +301,7 @@ simList <- foreach(i = 1:nSims, .packages = c("dplyr"), .options.RNG = 12345) %d
 
 stopCluster(cl)
 
+## Summarize across replicates
 avgSim <- bind_rows(simList) %>%
   group_by(time) %>%
   summarise(across(everything(), mean))
@@ -251,32 +310,31 @@ avgSim <- bind_rows(simList) %>%
 ## Visualization
 ## ---------------------------
 
-# Plot incidence over time
-p2 <- ggplot(avgSim, aes(x = time)) +
+
+# If you have observed data to overlay:
+obsData <- read.csv("Measles.csv") %>%
+  mutate(Week = seq(1, nrow(.)),
+         Day  = (Week * 7) - 7)
+
+p2 <- ggplot() +
+  geom_line(data = avgSim %>% filter(time <= 61),
+            aes(x = time, y = inc, color = "Simulated Incidence"), size = 1.2) +
+  geom_point(data = obsData,
+             aes(x = Day, y = Total, color = "Observed Incidence"), size = 3) +
+  labs(x = "Time (days)", y = "Incidence (new infections)",
+       title = "Simulated vs. Observed Incidence (First 5 Weeks)") +
+  scale_color_manual(values = c("Simulated Incidence" = "blue", 
+                                "Observed Incidence" = "red")) +
+  theme_minimal()
+
+p3 <- ggplot(avgSim, aes(x = time)) +
   geom_line(aes(y = inc, color = "Incidence"), size = 1.2) +
-  labs(x = "Time (days)", y = "Incidence", 
+  labs(x = "Time (days)", y = "Incidence",
        title = "Model-Predicted Incidence in Measles Outbreak") +
   theme_minimal() +
   scale_color_manual(values = c("Incidence" = "blue"))
 
-# Overlay with observed outbreak data if available
-obsData <- read.csv("Measles.csv") %>%
-  mutate(Week = seq(1, nrow(.)),
-         Day  = Week * 7)
-
-p3 <- ggplot() +
-  geom_line(data = avgSim %>% filter(time <= 42),
-            aes(x = time, y = inc, color = "Simulated Incidence"), size = 1.2) +
-  geom_point(data = obsData,
-             aes(x = Day, y = Total, color = "Observed Incidence"), size = 3) +
-  labs(x = "Time (days)", y = "Incidence (new infections)", 
-       title = "Simulated vs. Observed Incidence (First 5 Weeks)") +
-  scale_color_manual(values = c("Simulated Incidence" = "blue", "Observed Incidence" = "red")) +
-  theme_minimal()
-
 grid.arrange(p2, p3, ncol = 1)
-
-
 
 
 

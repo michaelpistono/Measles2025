@@ -1,6 +1,6 @@
 ##########################################################################
 ## IBM SEIR Model for Measles with 4 Age Groups 
-## (preK, kinder, 6-17, 18+) using Age-Assortative Mixing (4x4 contact matrix)
+## (preK, kindergarten, 6-17, 18+) using Age-Assortative Mixing (4x4 contact matrix)
 ##########################################################################
 
 rm(list = ls())
@@ -14,33 +14,37 @@ library(doRNG)      # For reproducible parallel RNG
 library(gridExtra)
 library(purrr)
 
-## ---------------------------
+################################
 ## Model Function: SEIR_ibm
-## ---------------------------
+################################
+
 SEIR_ibm <- function(initState, theta, numIter) {
   
   ## General transmission parameters
-  # beta in simulation loop allows for a change in transmission probability based on outbreak awareness  
-  ve           <- theta["ve"]           # Vaccine effectiveness (reduces force for low-risk)
-  latentMean   <- theta["latentPeriod"] # Mean latent period (days)
-  gamma_shape  <- 2
-  gamma_scale  <- theta["D"] / gamma_shape
+  ve <- theta["VE"]           # Vaccine effectiveness (reduces force for low-risk)
+  
+  
+  # Latent period follows a gamma distribution where most density falls between 8 and 12 days, mean of 10
+  latent_shape <- 25                     
+  latent_scale <- theta["latentPeriod"] / latent_shape
+  
+  # Infectious period parameters (also a gamma distribution where infectiousness peaks around 4 days with a long right tail)
+  infectious_shape  <- 2
+  infectious_scale  <- theta["Duration"] / infectious_shape
   
   ## District-Level Data & the remainder of the county population
-
   countyData <- data.frame(
     district    = c("Loop", "Seagraves", "Seminole", "Mennonite", "Remainder"),
-    
     population  = c(151,        519,        2961,         420,        18449),
-    pctUnder5   = c(0.0,        0.0,        0.0,          0.0,         11.8), #2,185 under 5/not enrolled in kindergarten yet (11.8% of 18449)
+    
+    pctUnder5   = c(0.0,        0.0,        0.0,          0.0,         11.8),
     pctKinder   = c(1.5,        7.6,        3.2,          10.0,         0.0),
-    pctUnder18  = c(100.0,      100.0,      100.0,        100.0,      21.95), #4,049 people under 18 not in school/homeschooled (21.95% of 18449)
+    pctUnder18  = c(100.0,      100.0,      100.0,        100.0,      21.95),
     
     preKExempt  = c(0.0,        0.0,        0.0,          0.0,         50.0),
     kinderExempt= c(53.85,      5.71,       7.86,         50.0,         0.0),
     k12Exempt   = c(47.95,      1.87,       13.8,         50.0,         9.8),
-    adultExempt = c(0.0,        0.0,        0.0,          0.0,          8.0) #assume 8% of adults in county not vaccinated since mennonites came to state after vax push
-    
+    adultExempt = c(0.0,        0.0,        0.0,          0.0,          8.0) 
   )
   
   totalCountyPop <- sum(countyData$population)
@@ -61,7 +65,7 @@ SEIR_ibm <- function(initState, theta, numIter) {
   for (i in (S0 + 1):N) {
     indiv[[i]] <- list(state = "I",
                        latentTime = NA,
-                       infectiousTime = rgamma(1, shape = gamma_shape, scale = gamma_scale),
+                       infectiousTime = rgamma(1, shape = infectious_shape, scale = infectious_scale),
                        days_infectious = 1)
   }
   
@@ -76,7 +80,6 @@ SEIR_ibm <- function(initState, theta, numIter) {
     countyParams <- countyData[countyData$district == assignedDistrict, ]
     
     # For the initial infectious individuals, force assignment to unvaccinated children.
-    # Here we assign them to the "5-17" age group and set risk = "H"
     if (i > S0) {
       indiv[[i]]$age <- "5-17"
       indiv[[i]]$risk <- "H"
@@ -135,15 +138,15 @@ SEIR_ibm <- function(initState, theta, numIter) {
   ## Simulation Loop
   for (t in 0:(numIter - 1)) {
     
-    if (t < 55.0) {  #people started vaccinating around day 40, and vaccine takes 10-14 days to become effective
+    if (t < 55.0) {  # MMR vaccinations started ramping up around day 40, and vaccine takes 10-14 days to become effective
       beta <- theta["beta"]  # transmission probability depending on time
     } else {
-      beta <- 0.025 #beta reduced by half after new wave of vaccinations
+      beta <- 0.025 # beta reduced by half after new wave of vaccinations
     }
     
-    # --- Set contact rates based on day-of-week ---
-    # On weekends (t %% 7 == 6 or 0) we use fixed contact values; otherwise use theta parameters.
+    # Set contact rates based on day-of-week 
     if ((t %% 7 == 6) || (t %% 7 == 0)) {
+      
       m_preK_preK    <- 15; m_preK_kinder  <- 15; m_preK_5_17   <- 15; m_preK_18   <- 12;
       m_kinder_preK  <- 12; m_kinder_kinder<- 15; m_kinder_5_17 <- 15; m_kinder_18 <- 12;
       m_5_17_preK    <- 12; m_5_17_kinder  <- 12; m_5_17_5_17   <- 25; m_5_17_18   <- 25;
@@ -174,15 +177,10 @@ SEIR_ibm <- function(initState, theta, numIter) {
     
     # Update days_infectious for those in state "I"
     for (j in 1:N) {
-      
       if (indiv[[j]]$state == "I") {
-        
         if (is.null(indiv[[j]]$days_infectious)) {
-          
           indiv[[j]]$days_infectious <- 1
-          
         } else {
-          
           indiv[[j]]$days_infectious <- indiv[[j]]$days_infectious + 1
         }
       }
@@ -195,7 +193,7 @@ SEIR_ibm <- function(initState, theta, numIter) {
     total_18      <- sum(sapply(indiv, function(x) x$age == "18+"))
     
     active_infectious <- function(x) {
-      x$state == "I" && !is.null(x$days_infectious) && x$days_infectious <= 4.5
+      x$state == "I" && !is.null(x$days_infectious) && x$days_infectious <= 4.5 #remove infected individuals from FOI calculation after rash appears
     }
     
     prev_preK    <- if (total_preK > 0)    sum(sapply(indiv, function(x) x$age == "preK"    && active_infectious(x))) / total_preK    else 0
@@ -209,28 +207,21 @@ SEIR_ibm <- function(initState, theta, numIter) {
       
       if (currentState == "S") {
         if (indiv[[j]]$age == "preK") {
-          
           lambda <- beta * (m_preK_preK   * prev_preK +
                               m_preK_kinder * prev_kinder +
                               m_preK_5_17   * prev_5_17 +
                               m_preK_18     * prev_18)
-          
         } else if (indiv[[j]]$age == "kinder") {
-          
           lambda <- beta * (m_kinder_preK   * prev_preK +
                               m_kinder_kinder * prev_kinder +
                               m_kinder_5_17   * prev_5_17 +
                               m_kinder_18     * prev_18)
-          
         } else if (indiv[[j]]$age == "5-17") {
-          
           lambda <- beta * (m_5_17_preK   * prev_preK +
                               m_5_17_kinder * prev_kinder +
                               m_5_17_5_17   * prev_5_17 +
                               m_5_17_18     * prev_18)
-          
         } else {  # "18+"
-          
           lambda <- beta * (m_18_preK   * prev_preK +
                               m_18_kinder * prev_kinder +
                               m_18_5_17   * prev_5_17 +
@@ -238,25 +229,23 @@ SEIR_ibm <- function(initState, theta, numIter) {
         }
         
         if (indiv[[j]]$risk == "L") {
-          
           lambda <- (1 - ve) * lambda
         }
         
         if (runif(1) < lambda) {
-          
           indiv[[j]]$state <- "E"
-          indiv[[j]]$latentTime <- rexp(1, rate = 1/latentMean)
+          # Draw the latent period from a gamma distribution
+          indiv[[j]]$latentTime <- rgamma(1, shape = latent_shape, scale = latent_scale)
         }
       }
       
       if (currentState == "E" && !is.na(indiv[[j]]$latentTime)) {
-        
         indiv[[j]]$latentTime <- indiv[[j]]$latentTime - 1
         
         if (indiv[[j]]$latentTime <= 0) {
           indiv[[j]]$state <- "I"
           indiv[[j]]$latentTime <- NA
-          indiv[[j]]$infectiousTime <- rgamma(1, shape = gamma_shape, scale = gamma_scale)
+          indiv[[j]]$infectiousTime <- rgamma(1, shape = infectious_shape, scale = infectious_scale)
           indiv[[j]]$days_infectious <- 1
         }
       }
@@ -292,21 +281,21 @@ SEIR_ibm <- function(initState, theta, numIter) {
   return(results)
 }
 
-## ---------------------------
+#########################################
 ## Simulation Parameters & Run
-## ---------------------------
+#########################################
 initState <- c(S = 22500, I = 2)
 
 theta <- c(
-  beta         = 0.051,
-  D            = 8,
-  latentPeriod = 10,
-  ve           = 0.97,
+  beta = 0.06,
+  Duration = 8,   # mean infectious duration
+  latentPeriod = 10,  # mean latent period
+  VE = 0.97, # VE after 2 doses of MMR vaccine
   
   ## Weekday contact matrix (4x4) parameters:
   m_preK_preK    = 1.8,
   m_preK_kinder  = 1.8,
-  m_preK_5_17    = 1.8, #based on average household size
+  m_preK_5_17    = 1.8, # based on average household size
   m_preK_18      = 2.0,
   
   m_kinder_preK    = 2.0,
@@ -315,7 +304,7 @@ theta <- c(
   m_kinder_18      = 10.0,
   
   m_5_17_preK    = 2.0,
-  m_5_17_kinder  = 25.0, #average school size in Gaines County is ~ 400 students
+  m_5_17_kinder  = 25.0, # average school size in Gaines County is ~ 400 students
   m_5_17_5_17    = 79.0,
   m_5_17_18      = 25.0,
   
@@ -325,10 +314,11 @@ theta <- c(
   m_18_18      = 24.0
 )
 
-numIter <- 250
-nSims   <- 100
+numIter <- 200  # number of time steps/days per simulation
+nSims   <- 1000   # number of replicates/simulations
 
-nCores <- parallel::detectCores() - 1
+
+nCores <- parallel::detectCores() - 1   #parallel processing so this doesn't take all year
 cl <- makeCluster(nCores)
 registerDoParallel(cl)
 
@@ -338,43 +328,39 @@ simList <- foreach(i = 1:nSims, .packages = c("dplyr"), .options.RNG = 12345) %d
 
 stopCluster(cl)
 
-avgSim <- bind_rows(simList) %>%
+
+avgSim <- bind_rows(simList) %>%    # calculate averages across all simulations
   group_by(time) %>%
   summarise(across(everything(), mean))
 
-simQuant <- bind_rows(simList) %>%
+simQuant <- bind_rows(simList) %>%    # calculate 2.5 and 97.5 quantiles for estimates
   group_by(time) %>%
   summarise(across(c(inc, cumCases),
                    list(lower = ~quantile(., probs = 0.025),
                         upper = ~quantile(., probs = 0.975))))
 
-
-## ---------------------------
+####################################
 ## Visualization
-## ---------------------------
+####################################
 
-
-
-obsData <- read.csv("Measles_gaines_observed.csv") %>%
+obsData <- read.csv("Measles_gaines_observed.csv") %>% # read in data from csv file
   mutate(Week = seq(1, nrow(.)),
-         Day  = (Week * 7) - 7)
+         Day  = (Week * 7) - 7) # ensure days start at 0 instead of 7
 
 p2 = ggplot(avgSim, aes(x = time)) +
-  geom_line(aes(y = inc), color = "blue", size = 1.2) +
+  geom_line(aes(y = inc, color = "Mean Simulated Incidence"), size = 1.2) +
   geom_point(data = obsData,
              aes(x = Day, y = Total/7, color = "Observed Incidence"), size = 3) +
   labs(x = "Time (days)", y = "Incidence (new infections)",
        title = "Simulated vs. Observed Incidence in Gaines County, TX") +
-  scale_color_manual(values = c("Simulated Incidence" = "blue", 
+  scale_color_manual(values = c("Mean Simulated Incidence" = "blue",
                                 "Observed Incidence" = "red")) +
   theme_test()
 
 grid.arrange(p2, ncol = 1)
 
 
-
-
-simDF <- bind_rows(simList, .id = "sim")
+simDF <- bind_rows(simList, .id = "sim") # move cumulative data into long form for plotting
 
 p3 <- ggplot() +
   geom_line(data = simDF, aes(x = time, y = cumCases, group = sim),
@@ -384,7 +370,7 @@ p3 <- ggplot() +
   geom_point(data = obsData,
              aes(x = Day, y = Cumulative, color = "Observed Cases"), size = 3) +
   labs(x = "Time (days)", y = "Cumulative Cases",
-       title = "Simulated Cumulative Cases in Gaines County, TX") +
+       title = "Simulated vs. Observed Cumulative Cases in Gaines County, TX") +
   scale_color_manual(name = "", 
                      values = c("Mean Cumulative Cases" = "blue",
                                 "Observed Cases" = "red")) +
@@ -393,59 +379,3 @@ p3 <- ggplot() +
 grid.arrange(p3, ncol = 1)
 
 
-
-###############################
-## MLE: Estimating beta via MLE
-###############################
-
-# For computational speed during estimation, use a reduced number of simulation replicates.
-nSims_MLE <- 25  # adjust as needed
-
-# Initialize a cluster for the MLE block.
-nCores_MLE <- parallel::detectCores() - 1
-cl_mle <- makeCluster(nCores_MLE)
-
-# Export necessary objects to the worker nodes.
-clusterExport(cl_mle, varlist = c("SEIR_ibm", "initState", "theta", "numIter", "obsData"))
-registerDoParallel(cl_mle)
-
-# Define the negative log-likelihood function.
-neg_log_lik <- function(log_beta) {
-  
-  # Transform parameter back (we optimize on log-scale)
-  beta_val <- exp(log_beta)
-  
-  # Update theta with the candidate beta
-  theta_fit <- theta
-  theta_fit["beta"] <- beta_val
-  
-  # Run the simulation replicates with the candidate parameter
-  simList_temp <- foreach(i = 1:nSims_MLE, .packages = c("dplyr"), .options.RNG = 12345) %dorng% {
-    SEIR_ibm(initState, theta_fit, numIter)
-  }
-  
-  # Compute the average simulation output (here we use cumulative cases)
-  avgSim_temp <- bind_rows(simList_temp) %>%
-    group_by(time) %>%
-    summarise(cumCases = mean(cumCases))
-  
-  # Extract model-predicted cumulative cases at the observation days.
-  pred <- approx(x = avgSim_temp$time, y = avgSim_temp$cumCases,
-                 xout = obsData$Day, rule = 2)$y
-  
-  # Compute the negative log-likelihood assuming a Poisson distribution.
-  nll <- -sum(dpois(obsData$Cumulative, lambda = pred, log = TRUE))
-  
-  return(nll)
-}
-
-# Use optim to minimize the negative log-likelihood.
-init_log_beta <- log(theta["beta"])
-opt_res <- optim(par = init_log_beta, fn = neg_log_lik, method = "BFGS")
-
-# Get the estimated beta value
-beta_est <- exp(opt_res$par)
-cat("Estimated beta =", beta_est, "\n")
-
-# Stop the cluster for the MLE block
-stopCluster(cl_mle)

@@ -24,8 +24,8 @@ SEIR_ibm <- function(initState, theta, numIter) {
   ve <- theta["VE"]           # Vaccine effectiveness (reduces force for low-risk)
   
   
-  # Latent period follows a gamma distribution where most density falls between 8 and 12 days, mean of 10
-  latent_shape <- 25                     
+  # Latent period follows a gamma distribution where most density falls between 5 and 12 days, mean of 10
+  latent_shape <- 3                     
   latent_scale <- theta["latentPeriod"] / latent_shape
   
   # Infectious period parameters (also a gamma distribution where infectiousness peaks around 4 days with a long right tail)
@@ -41,10 +41,10 @@ SEIR_ibm <- function(initState, theta, numIter) {
     pctKinder   = c(1.5,        7.6,        3.2,          10.0,         0.0),
     pctUnder18  = c(100.0,      100.0,      100.0,        100.0,      21.95),
     
-    preKExempt  = c(0.0,        0.0,        0.0,          0.0,         50.0),
+    preKExempt  = c(0.0,        0.0,        0.0,          0.0,         65.0),
     kinderExempt= c(53.85,      5.71,       7.86,         50.0,         0.0),
     k12Exempt   = c(47.95,      1.87,       13.8,         50.0,         9.8),
-    adultExempt = c(0.0,        0.0,        0.0,          0.0,          8.0) 
+    adultExempt = c(0.0,        0.0,        0.0,          0.0,          7.0) 
   )
   
   totalCountyPop <- sum(countyData$population)
@@ -141,16 +141,16 @@ SEIR_ibm <- function(initState, theta, numIter) {
     if (t < 55.0) {  # MMR vaccinations started ramping up around day 40, and vaccine takes 10-14 days to become effective
       beta <- theta["beta"]  # transmission probability depending on time
     } else {
-      beta <- 0.025 # beta reduced by half after new wave of vaccinations
+      beta <- 0.045 # beta reduced by half after new wave of vaccinations    was .025!!!
     }
     
     # Set contact rates based on day-of-week 
     if ((t %% 7 == 6) || (t %% 7 == 0)) {
       
-      m_preK_preK    <- 15; m_preK_kinder  <- 15; m_preK_5_17   <- 15; m_preK_18   <- 12;
-      m_kinder_preK  <- 12; m_kinder_kinder<- 15; m_kinder_5_17 <- 15; m_kinder_18 <- 12;
-      m_5_17_preK    <- 12; m_5_17_kinder  <- 12; m_5_17_5_17   <- 25; m_5_17_18   <- 25;
-      m_18_preK      <- 12; m_18_kinder    <- 12; m_18_5_17     <- 25; m_18_18     <- 30;
+      m_preK_preK    <- 2.5;m_preK_kinder  <- 5;  m_preK_5_17   <- 5;  m_preK_18   <- 5;
+      m_kinder_preK  <- 5; m_kinder_kinder <- 5;  m_kinder_5_17 <- 10; m_kinder_18 <- 10;
+      m_5_17_preK    <- 10; m_5_17_kinder  <- 10; m_5_17_5_17   <- 20; m_5_17_18   <- 20;
+      m_18_preK      <- 10; m_18_kinder    <- 10; m_18_5_17     <- 20; m_18_18     <- 20;
       
     } else {
       
@@ -287,7 +287,7 @@ SEIR_ibm <- function(initState, theta, numIter) {
 initState <- c(S = 22500, I = 2)
 
 theta <- c(
-  beta = 0.06,
+  beta = 0.05,
   Duration = 8,   # mean infectious duration
   latentPeriod = 10,  # mean latent period
   VE = 0.97, # VE after 2 doses of MMR vaccine
@@ -304,18 +304,18 @@ theta <- c(
   m_kinder_18      = 10.0,
   
   m_5_17_preK    = 2.0,
-  m_5_17_kinder  = 25.0, # average school size in Gaines County is ~ 400 students
-  m_5_17_5_17    = 79.0,
-  m_5_17_18      = 25.0,
+  m_5_17_kinder  = 20.0, # average school size in Gaines County is ~ 400 students
+  m_5_17_5_17    = 72.0,
+  m_5_17_18      = 20.0,
   
   m_18_preK    = 2.0,
   m_18_kinder  = 5.0,
   m_18_5_17    = 5.0,
-  m_18_18      = 24.0
+  m_18_18      = 20.0
 )
 
-numIter <- 200  # number of time steps/days per simulation
-nSims   <- 1000   # number of replicates/simulations
+numIter <- 365  # number of time steps/days per simulation
+nSims   <- 100   # number of replicates/simulations
 
 
 nCores <- parallel::detectCores() - 1   #parallel processing so this doesn't take all year
@@ -347,10 +347,15 @@ obsData <- read.csv("Measles_gaines_observed.csv") %>% # read in data from csv f
   mutate(Week = seq(1, nrow(.)),
          Day  = (Week * 7) - 7) # ensure days start at 0 instead of 7
 
+simDF <- bind_rows(simList, .id = "sim") # move cumulative data into long form for plotting
+
 p2 = ggplot(avgSim, aes(x = time)) +
+  geom_line(data = simDF, aes(x = time, y = inc, group = sim),
+            color = "gray", size = 0.6, alpha = 0.5) +
   geom_line(aes(y = inc, color = "Mean Simulated Incidence"), size = 1.2) +
   geom_point(data = obsData,
              aes(x = Day, y = Total/7, color = "Observed Incidence"), size = 3) +
+  
   labs(x = "Time (days)", y = "Incidence (new infections)",
        title = "Simulated vs. Observed Incidence in Gaines County, TX") +
   scale_color_manual(values = c("Mean Simulated Incidence" = "blue",
@@ -359,23 +364,5 @@ p2 = ggplot(avgSim, aes(x = time)) +
 
 grid.arrange(p2, ncol = 1)
 
-
-simDF <- bind_rows(simList, .id = "sim") # move cumulative data into long form for plotting
-
-p3 <- ggplot() +
-  geom_line(data = simDF, aes(x = time, y = cumCases, group = sim),
-            color = "gray", size = 0.6, alpha = 0.5) +
-  geom_line(data = avgSim, aes(x = time, y = cumCases, color = "Mean Cumulative Cases"),
-            size = 1.2) +
-  geom_point(data = obsData,
-             aes(x = Day, y = Cumulative, color = "Observed Cases"), size = 3) +
-  labs(x = "Time (days)", y = "Cumulative Cases",
-       title = "Simulated vs. Observed Cumulative Cases in Gaines County, TX") +
-  scale_color_manual(name = "", 
-                     values = c("Mean Cumulative Cases" = "blue",
-                                "Observed Cases" = "red")) +
-  theme_test()
-
-grid.arrange(p3, ncol = 1)
 
 

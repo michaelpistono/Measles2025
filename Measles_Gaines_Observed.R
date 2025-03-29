@@ -315,7 +315,7 @@ theta <- c(
 )
 
 numIter <- 365  # number of time steps/days per simulation
-nSims   <- 100   # number of replicates/simulations
+nSims   <- 1000   # number of replicates/simulations
 
 
 nCores <- parallel::detectCores() - 1   #parallel processing so this doesn't take all year

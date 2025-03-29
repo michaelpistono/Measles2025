@@ -1,7 +1,7 @@
 
 
-This individual-based model (IBM) simulates a measles outbreak using a SEIR framework 
-(Susceptible, Exposed, Infectious, Recovered) with four age groups—preK, kindergarten, 5–17, and 18+—and age-assortative mixing via a 4×4 contact matrix.
+This individual-based model (IBM) simulates the 2025 measles outbreak in Gaines County, TX, using a SEIR framework 
+(Susceptible, Exposed, Infectious, Recovered) with four age groups—preK, kindergarten, 6–17, and 18+—and age-assortative mixing via 2 4×4 contact matrices.
 It incorporates district-level population data, vaccination effects, and day-of-week variations in contact rates.
 
 ---
@@ -35,7 +35,7 @@ The model assigns each individual to a district and age group based on district-
 - **Disease Dynamics:**
   - **Latent Period:** Modeled with a gamma distribution (mean ≈ 10 days, shape = 3).
   - **Infectious Period:** Modeled with a gamma distribution (mean ≈ 8 days, shape = 2). Infectiousness is considered active only for a limited period (up to 4.5 days) to simulate the appearance of rash.
-  - **Vaccination:** Vaccine effectiveness (VE) reduces the force of infection for low-risk individuals.
+  - **Vaccination:** Vaccine effectiveness (VE) reduces the force of infection for vaccinated individuals by 97%, the estimated VE for MMR vaccines.
 
 - **Age-Assortative Mixing:**
   - The model uses a 4×4 contact matrix where contact rates vary by age group.
@@ -43,8 +43,8 @@ The model assigns each individual to a district and age group based on district-
   - Weekend contact rates are fixed at higher values, reflecting increased social mixing during these days.
 
 - **District-Level Data:**
-  - Population data and age-specific parameters (e.g., percentage of children in each age bracket, exemption rates) are defined for several districts.
-  - Each individual is randomly assigned a district, which then influences their age group and risk status.
+  - Population data and age-specific parameters (e.g., percentage of children in each age bracket, vaccine exemption rates) are defined for several districts.
+  - Each individual is randomly assigned a school district or to the general population, which then influences their age group and risk status.
 
 ---
 

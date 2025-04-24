@@ -146,7 +146,7 @@ SEIR_ibm <- function(initState, theta, numIter) {
     
     if (t < 22) {  # exponential phase
       
-      beta <- 0.10 # 94% vaccine coverage among those exposed (mostly kids in the monnonite schools)
+      beta <- 0.10 # 94% vaccine coverage among those exposed (mostly kids in the Mennonite schools)
       
     } else if (t < 71) { # awareness of outbreak and vaccinations begin to take effect
       

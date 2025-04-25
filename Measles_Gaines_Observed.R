@@ -36,12 +36,12 @@ SEIR_ibm <- function(initState, theta, numIter) {
     district    = c("Loop", "Seagraves", "Seminole", "Mennonite", "Remainder"),
     population  = c(151,        519,        2961,         420,        18449),
     
-    pctUnder5   = c(0.0,        0.0,        0.0,          0.0,         7.8),
-    pctKinder   = c(1.5,        7.6,        3.2,          10.0,         4.0),
-    pctUnder18  = c(100.0,      100.0,      100.0,        100.0,      21.95),
+    pctUnder5   = c(0.0,        0.0,        0.0,           0.0,       7.8),
+    pctKinder   = c(1.5,        7.6,        3.2,          10.0,       4.0),
+    pctUnder18  = c(100.0,      100.0,    100.0,         100.0,      21.95),
     
     preKExempt  = c(0.0,        0.0,        0.0,          0.0,         65.0), # large proportion of those under 5 are homeschooled
-    kinderExempt= c(53.85,      5.71,       7.86,         50.0,        50.0), # assumes 50% MMR vaccine covereage among mennonite and homeschooled children
+    kinderExempt= c(53.85,      5.71,       7.86,         50.0,        50.0),
     k12Exempt   = c(47.95,      1.87,       13.8,         50.0,         9.8),
     adultExempt = c(0.0,        0.0,        0.0,          0.0,          7.0)
   )
@@ -141,20 +141,20 @@ SEIR_ibm <- function(initState, theta, numIter) {
   ## Simulation Loop
   for (t in 0:(numIter - 1)) {
     
-    # Initialize counter for new infections at this time step
+    # NEW: Initialize counter for new infections at this time step
     new_infections_today <- 0
     
     if (t < 22) {  # exponential phase
       
-      beta <- 0.10 # 94% vaccine coverage among those exposed (mostly kids in the Mennonite schools)
+      beta <- 0.10 # 94% vaccine coverage
       
-    } else if (t < 71) { # awareness of outbreak and vaccinations begin to take effect
+    } else if (t < 73) { # awareness of outbreak and vaccinations begin to take effect
       
-      beta <- 0.042 # 97.5% vaccine coverage
+      beta <- 0.04 # 97.5% vaccine coverage
       
     } else {
       
-      beta <- theta["beta"] # simulate varied MMR coverage 
+      beta <- theta["beta"] # simulate varied MMR coverage
     }
     
     # Set contact rates based on day-of-week 
@@ -245,12 +245,12 @@ SEIR_ibm <- function(initState, theta, numIter) {
           lambda <- (1 - ve) * lambda
         }
         
-        # Instead of simply updating state, first draw a random number and count new infections
+        # NEW: Instead of simply updating state, first draw a random number and count new infections
         r_val <- runif(1)
         if (r_val < lambda) {
           indiv[[j]]$state <- "E"
           indiv[[j]]$latentTime <- rgamma(1, shape = latent_shape, scale = latent_scale)
-          new_infections_today <- new_infections_today + 1  # count this new infection
+          new_infections_today <- new_infections_today + 1  # NEW: count this new infection
         }
       }
       
@@ -307,7 +307,7 @@ SEIR_ibm <- function(initState, theta, numIter) {
 initState <- c(S = 22500, I = 1)
 
 theta <- c(
-  beta = 0.025,  # 0.036 vs 0.025 to simulate no change in the baseline probability of transmission vs reduced probability w/ ~98.5% vax coverage
+  beta = 0.02,  # 0.036 vs 0.027 vs 0.021
   Duration = 8,   # mean infectious duration
   latentPeriod = 10,  # mean latent period
   VE = 0.97, # VE after 2 doses of MMR vaccine
@@ -334,8 +334,8 @@ theta <- c(
   m_18_18      = 20.0
 )
 
-numIter <- 365  # number of time steps/days per simulation
-nSims   <- 1000   # number of replicates/simulations
+numIter <- 265  # number of time steps/days per simulation
+nSims   <- 100   # number of replicates/simulations
 
 nCores <- parallel::detectCores() - 1   # parallel processing so this doesn't take all year
 cl <- makeCluster(nCores)
@@ -367,7 +367,6 @@ obsData <- read.csv("Measles_gaines_observed.csv") %>% # read in data from csv f
 
 simDF <- bind_rows(simList, .id = "sim") # move cumulative data into long form for plotting
 
-# plot incidence compared with simulated incidence
 p2 = ggplot(avgSim, aes(x = time)) +
   geom_line(data = simDF, aes(x = time, y = inc, group = sim),
             color = "gray", size = 0.6, alpha = 0.5) +
@@ -383,7 +382,7 @@ p2 = ggplot(avgSim, aes(x = time)) +
 
 
 
-# plot cumulative cases compared to simulative cumulative cases
+
 
 p3 <- ggplot() +
   geom_line(data = simDF, aes(x = time, y = cumCases, group = sim),
@@ -400,5 +399,6 @@ p3 <- ggplot() +
   theme_test()
 
 grid.arrange(p2, p3, ncol = 1)
+
 
 
